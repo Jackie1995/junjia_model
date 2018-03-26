@@ -1,6 +1,6 @@
 ---
-title: "ziru_resblock_renttype_meanprice_peraera"
-author: "JK"
+title: "北京自如[2018.1.1-2018.3.15]签约房源的均价分析"
+author: "季康"
 date: "2018年3月23日"
 output: 
   html_document:
@@ -15,15 +15,42 @@ knitr::opts_chunk$set(
 )
 ```
 
+
 ## 背景介绍：
 数据来源：商家=自如；城市=北京；时间范围：sign_time:2018年；pt=20180315</br>
 模型目标：对原始数据集中出现的所有小区，求整租均值和合租均值两个均值。</br>
 遇到的主要难题：我们的来源数据，可能不会覆盖所有的小区的整租与合租类型。会造成均值统计数据的缺失。</br>
-解决方法就是：在北京市范围内，以小区为统计单元，建立整租均价和合租均价的回归关系。实现二者的相互预测。</br>
+解决方法就是：在北京市范围内，以小区为统计单元，建立整租均价和合租均价的回归关系。实现二者的相互预测和插补。</br>
+本案例对均价模型的助益：在某小区的整租与合租数据历史数据<知一缺一>的情况下，可以通过回归关系补全缺失数据。</br>
+不足：如果历史数据对某小区的数据完全缺失，本例这种基于租赁类型维度的插补策略失效。</br>
+
+## step 1：在adhoc中提取数据：
+在adhoc中的使用的sql查询语句如下：导出数据存为：625703.csv
+```{sql eval=FALSE}
+SELECT hdic_city_id, hdic_district_id, hdic_bizcircle_id, hdic_resblock_id, 
+case frame_bedroom_num when '1' then '1' when '2' then '2' when '3' then '3' else '0' end as frame_bedroom_num , 
+case rent_type when '1' then '1' when '2' then '2' else '0' end as rent_type, case decoration when '1' then '1' when '2' then '2' when '3' then '3' else'0' end as decoration, 
+appid,
+price_trans, 
+price_listing, 
+price_trans/rent_area as price_trans_per_area, 
+price_listing/rent_area as price_listing_per_area,
+to_date(sign_time) as sign_date, 
+to_date(app_ctime) as appc_date, 
+datediff(to_date(sign_time),to_date(app_ctime)) as diff_days, 
+pt 
+FROM ods.ods_lianjia_house_rent_new_da 
+WHERE hdic_city_id = 110000 and appid = 500 and pt='20180315000000' 
+and sign_time like '2018%' and from_unixtime(unix_timestamp(app_ctime,'yyyy-mm-dd ss:ss:ss'),'yyyymmddssssss')> '201701010000000'
+
+```
 
 
-##第一步：读入数据。
-读入的数据的维数是：17202行    16列</br>
+
+
+##step 2：读入数据。
+读入在adhoc中导出的数据：625703.csv
+数据的维数是：17202行    16列</br>
 数据框ziru0的部分数据如下：</br>
 ```{r warning=FALSE}
 setwd("C:/Users/lianjia/Desktop/junjia_model_lianjia")
@@ -31,7 +58,8 @@ ziru0 = read.csv('625703.csv')
 dim(ziru0)# 17202    16
 head(ziru0)
 ```
-##第二步：数据类型转换：
+
+##step 3：数据类型转换：
 将价格转换成数值型变量。</br>
 将装修情况和租赁类型转换成因子型变量。</br>
 在数据框ziru0中删除价格price_listing_per_area缺失或者price_trans_per_area缺失的观测。</br>
@@ -48,7 +76,7 @@ complete_row = complete.cases(ziru0$price_trans_per_area,ziru0$price_listing_per
 ziru0 = ziru0[complete_row,]
 ```
 
-##第三步：对数据框ziru0分组
+##step 4：对数据框ziru0分组
 按（商圈，小区，租赁方式）对数据框ziru0分组：得到ziru1_group</br>
 按这种方式可以分为：3937组。</br>
 查看各个组包含样本数的table表。</br>
@@ -65,7 +93,7 @@ n_groups(ziru1_group)
 #查看各个组包含样本数的统计表：
 table(group_size(ziru1_group))
 ```
-##第四步：对分组数据求聚合：
+##step 5：对分组数据求聚合：
 应用dplyr包中对ziru0这个数据框分组（分组依据：小区，租赁类型）</br>
 并对每组求聚合值（组内样本数n，组内平均单价mean_price）</br>
 得到新的数据框：ziru2（宽表）。</br>
@@ -73,12 +101,13 @@ ziru2（宽表）维度：3932行 4列</br>
 ziru2 的head如下：</br>
 ```{r}
 ziru2 = ziru0 %>%
-  group_by(hdic_resblock_id,rent_type) %>%
+  group_by(hdic_district_id,hdic_resblock_id,rent_type) %>%
   summarise(n = n(),mean_price = mean(price_trans_per_area))
 dim(ziru2)
 head(ziru2)
+
 ```
-##第五步：聚合长表变宽表
+##step 6：聚合长表变宽表
 将长表ziru2转换为宽表 ziru2_rent_type_junjia</br>
 新宽表的3列：小区ID，整租的平均单价，合租的平均单价。</br>
 宽表的维度是： 2745 行   3列</br>
@@ -87,17 +116,61 @@ head(ziru2)
 ziru2_rent_type_junjia（宽表）的head如下：</br>
 ```{r}
 library(reshape2)
-ziru2_rent_type_junjia = dcast(data = ziru2,formula = hdic_resblock_id~rent_type) #长表变宽表。
-#修改一下新数据框的列名称，新数据框的3列：小区ID，整租的平均单价，合租的平均单价。
-names(ziru2_rent_type_junjia)[2:3]=c('zheng_mean','he_mean')
+ziru2_rent_type_junjia = dcast(data = ziru2,formula =hdic_district_id+hdic_resblock_id~rent_type) #长表变宽表。
+#改变宽表ziru2_rent_type_junjia中的数据类型：
+ziru2_rent_type_junjia$hdic_district_id = as.factor(ziru2_rent_type_junjia$hdic_district_id)
+ziru2_rent_type_junjia$hdic_resblock_id =
+as.factor(ziru2_rent_type_junjia$hdic_resblock_id)
+#修改一下的宽表的列名称，新数据框的3列：小区ID，整租的平均单价，合租的平均单价。
+names(ziru2_rent_type_junjia)[3:4]=c('zheng_mean','he_mean')
 dim(ziru2_rent_type_junjia)
 sum(is.na(ziru2_rent_type_junjia))
 #统计整租与合租的缺失值数目。
 sum(is.na(ziru2_rent_type_junjia$zheng_mean))#808个整租均值缺失
 sum(is.na(ziru2_rent_type_junjia$he_mean))#750个合租均值缺失
 head(ziru2_rent_type_junjia)
+
+#绘制箱线图与散点图来挖掘整租均值和合租均值这两个变量的关系;
+
+#绘制箱线图如下：
+library(ggplot2)
+ggplot(data = ziru2,aes(x = rent_type,y =mean_price))+
+ geom_boxplot(aes(fill =rent_type ),outlier.colour = '#FF0000')+
+  labs(x = "租赁类型",y= '单位面积租赁价格（元）',fill='租赁类型',title='单位面积租赁价格——箱线图')+
+  scale_x_discrete(labels = c('整租','合租'))+
+  scale_fill_discrete(labels = c('整租','合租'))+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#绘制散点图如下：
+ggplot(data = ziru2_rent_type_junjia,aes(x = zheng_mean,y=he_mean))+
+ geom_point(aes(color = hdic_district_id))+
+  labs(x='整租单位面积价格',y='合租单位面积价格',color = '所在行政区',title='整租与合租价格——散点图（插补前）')+
+  scale_x_continuous(limits = c(50,180))+
+  #scale_y_continuous(limits = c(50,400))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#绘制缺失数据所在的行政区：
+indexNA_zheng = which(is.na(ziru2_rent_type_junjia$zheng_mean))
+indexNA_he = which(is.na(ziru2_rent_type_junjia$he_mean))
+
+ggplot(data = ziru2_rent_type_junjia[c(indexNA_he,indexNA_zheng),],aes(x=reorder(hdic_district_id,rep(1,length(hdic_district_id)),sum)))+
+  geom_bar(fill = '#FF6347',color = '#8B1A1A')+theme_bw()+
+  theme(axis.text.x = element_text(angle=30, hjust=1, vjust=1))+
+  labs(x='行政区编号',y='信息不完整的小区数目',title = '各行政区信息缺失情况对比图')+
+  theme(plot.title = element_text(hjust = 0.5))
+  
+  #geom_text(aes(label = count))
+  
+  
 ```
-##第六步：建立整租均价和合租均价间的回归模型
+
+</br>从箱线图可以看出：这两个均价均呈右偏分布。</br>
+从散点图可以看出，整租均价与合租均价呈现明显的线性相关性。</br>
+
+##step 7：建立整租均价和合租均价间的回归模型
 首要问题：这两个变量谁做因变量？可参考：统计整租与合租的缺失值数目.</br>
 808个整租均值缺失; 750个合租均值缺失.</br>
 合租的缺失值少，所以将合租作为自变量，整租作为因变量来预测。</br>
@@ -122,7 +195,7 @@ summary(lm_3)$r.squared
 
 ```
 
-##第七步：对小区均值表中的<整租均价>缺失值进行插补。
+##step 8：对小区均值表中的<整租均价>缺失值进行插补。
 先找到两列变量缺失值的位置索引indexNA_zheng和indexNA_he。</br>
 对缺失的zheng_mean进行回归预测,对缺失的zheng_mean进行补缺。</br>
 
@@ -131,12 +204,12 @@ summary(lm_3)$r.squared
 indexNA_zheng = which(is.na(ziru2_rent_type_junjia$zheng_mean))
 indexNA_he = which(is.na(ziru2_rent_type_junjia$he_mean))
 #对缺失的zheng_mean进行回归预测
-predict_lm1 = predict(object = lm_1,newdata= ziru2_rent_type_junjia[indexNA_zheng,c(2,3)])
+predict_lm1 = predict(object = lm_1,newdata= ziru2_rent_type_junjia[indexNA_zheng,])
 #对缺失的zheng_mean进行补缺。
 ziru2_rent_type_junjia[indexNA_zheng,'zheng_mean']=predict_lm1**2
 ```
 
-##第八步：再对小区均值表中的<合租均价>缺失值进行插补。
+##step 9：再对小区均值表中的<合租均价>缺失值进行插补。
 zheng_mean完整之后，再he_mean进行第二次回归补缺:由lm_1可知，两变量间是是两次函数关系.</br>
 第二次回归使用的的样本量:2330个。第二次回归的R2：0.5041</br>
 补缺后查看均值表ziru2_rent_type_junjia：现在均值表中已经没有缺失的均价数据</br>
@@ -145,10 +218,27 @@ zheng_mean完整之后，再he_mean进行第二次回归补缺:由lm_1可知，�
 lm_4 = lm(formula = he_mean~sqrt(zheng_mean),data =ziru2_rent_type_junjia,na.action = na.omit )
 summary(lm_4)$r.squared #Multiple R-squared:  0.5041
 #选用lm_4模型来对he_mean补缺。
-predict_lm4 = predict(object = lm_4,newdata = ziru2_rent_type_junjia[indexNA_he,c(2,3)])
+predict_lm4 = predict(object = lm_4,newdata = ziru2_rent_type_junjia[indexNA_he,])
 ziru2_rent_type_junjia[indexNA_he,'he_mean']=predict_lm4
 head(ziru2_rent_type_junjia)
 #现在均值表中已经没有缺失的均价数据。
 sum(is.na(ziru2_rent_type_junjia))
 ```
+
+##step 10：将插补后效果可视化：
+回归插补之后的散点图如下：
+```{r}
+ggplot(data = ziru2_rent_type_junjia,aes(x = zheng_mean,y=he_mean))+
+ geom_point(aes(color = hdic_district_id))+
+  labs(x='整租单位面积价格',y='合租单位面积价格',color = '所在行政区',title='整租与合租价格——散点图（插补后）')+
+  scale_x_continuous(limits = c(50,180))+
+  #scale_y_continuous(limits = c(50,400))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+
 
