@@ -62,6 +62,7 @@ head(ziru0)
 ##step 3：数据类型转换：
 将价格转换成数值型变量。</br>
 将装修情况和租赁类型转换成因子型变量。</br>
+添加出租面积area这个字段。</br>
 在数据框ziru0中删除价格price_listing_per_area缺失或者price_trans_per_area缺失的观测。</br>
 以保证我们的源数据的单位价格变量没有缺失。</br>
 ```{r }
@@ -71,10 +72,224 @@ ziru0[,numeric_names] = apply(ziru0[,numeric_names],2,as.numeric)
 ##要变成因子型的变量：factor_names
 ziru0$decoration = as.factor(ziru0$decoration)
 ziru0$rent_type = as.factor(ziru0$rent_type)
+##增加新的一列：area（因为在sql中提数的时候忘记提这个字段了）
+ziru0$area = ziru0$price_listing/ziru0$price_listing_per_area
 #在数据框ziru0中删除价格price_listing_per_area缺失或者price_trans_per_area缺失的观测。
 complete_row = complete.cases(ziru0$price_trans_per_area,ziru0$price_listing_per_area)
 ziru0 = ziru0[complete_row,]
 ```
+## 对商圈这个地理维度进行数据挖掘
+### 构建新的数据框：shangquan
+```{r}
+a = sort(table(ziru0$hdic_bizcircle_id))
+#共216个商圈  length(a)=216 
+#新建一个数据框：shangquan
+shangquan = data.frame(number = a)
+
+#依照商圈的租房热门程度,编码离散化变量：商圈热度：
+#变量离散化过程中阈值的选择依据：（1-33：冷清）包含25%的商圈,（34-100：一般）包含50%的商圈，（101及以上：热门）包含25%的商圈。
+#商圈过去3个月成交量的分位数如下：
+summary(shangquan$number.Freq)
+#在数据框shangquan中新增加一列：shangquan_degree
+library(dplyr)
+shangquan <- shangquan %>%
+  mutate(
+    shangquan_degree = case_when(
+      number.Freq <=33 ~ '冷清商圈',
+      number.Freq>34 & number.Freq<100 ~ '一般商圈',
+      number.Freq>=100 ~ '热门商圈' 
+      )
+  )
+#重命名数据框各列。
+shangquan$shangquan_degree=as.factor(shangquan$shangquan_degree)
+names(shangquan) = c('hdic_bizcircle_id','shangquan_pinshu','shangquan_degree')
+
+#将北京自如的商圈的热门情况导出：
+write.csv(shangquan,file = 'C:/Users/lianjia/Desktop/junjia_model_lianjia/ziru_hot_shangquan',sep = ',')
+```
+
+###画图：北京自如的热门商圈展示
+
+```{r}
+windowsFonts(myFont=windowsFont("楷体"))
+library(ggplot2)
+ggplot(shangquan[shangquan$shangquan_degree=='热门商圈',],aes(x = hdic_bizcircle_id,y = shangquan_pinshu))+
+  geom_bar(stat = 'identity',fill='#FFD700',color = '#8B6508')+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=1))+
+  labs(x= 'top25%热门商圈ID',y='商圈近3个月的成交量',title = '北京自如热门商圈展示',subtitle = '热门商圈定义：过去3个月成交量>100笔')+
+  theme(plot.title = element_text(hjust = 0.5),plot.subtitle = element_text(family = 'myFont',size = 8 ,colour = 'red'))
+```
+
+
+
+##step :对出租面积area进行描述性的统计分析,来挖掘出租面积对签约价格的影响。
+### 1) 出租面积箱线图(整租合租对比）：
+结论：75%的自如整租房源出租面积在50平米到100平米之间</br>
+      50%的自如合租房源出租面积在10平米到15平米之间</br>
+```{r}
+library(ggplot2)
+ggplot(data = ziru0,aes(x = rent_type,y=area))+
+  geom_boxplot(aes(colour = rent_type),alpha=0.4)+
+  labs(x='房源租赁类型',y='房源出租面积',color = '租赁类型',title='房源出租面积——箱线图')+
+  scale_x_discrete(labels = c('整租','合租'))+
+  scale_y_continuous(limits = c(0,200))+
+  scale_color_discrete(labels = c('整租','合租'))+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+###2)房源签约价格与出租面积散点图（整租合租对比）：
+结论：从图中可以看出签约价格（price_listing）与出租面积（area）的线性关系明显。</br>
+      整租与合租的房源在这面积和价格维度上有明显的聚类分离现象。</br>
+#### 1.用北京所有商圈的房源数据来做图（17000条）
+```{r}
+ggplot(data = ziru0,aes(x = area,y=price_trans))+
+  geom_point(aes(color = rent_type),alpha=0.4)+
+  labs(x='房源租赁面积',y='房源签约价格',color = '租赁类型',title='房源签约价格与租赁面积——散点图')+
+  scale_x_continuous(limits = c(0,175))+
+  scale_y_continuous(limits = c(0,15000))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_color_discrete(labels = c('整租','合租'))
+
+ggplot(data = ziru0[ziru0$rent_type==2,],aes(x = area,y=price_trans))+
+  geom_point(color='DeepSkyBlue',alpha=0.4)+
+  labs(x='合租房源租赁面积',y='房源签约价格',color = '租赁类型',title='<合租房源>签约价格与租赁面积——散点图')+
+  scale_x_continuous(limits = c(0,50))+
+  scale_y_continuous(limits = c(0,7000))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5)，)
+#合租房源的成交价格和出租面积的相关系数：0.1 #所以合租房源的成交价格不能用单位价格来衡量。
+cor(x = ziru0[ziru0$rent_type==2,'price_trans'],y = ziru0[ziru0$rent_type==2,'area'],method = 'pearson')
+#整租房源的成交价格和出租面积的相关系数：0.44
+cor(x = ziru0[ziru0$rent_type==1,'price_trans'],y = ziru0[ziru0$rent_type==1,'area'],method = 'pearson')
+
+```
+</br>
+#### 2.用北京某个商圈内的房源数据来做图（614条）
+```{r}
+
+ggplot(data = ziru0[ziru0$hdic_bizcircle_id==18335745,],aes(x = area,y=price_trans))+
+  geom_point(aes(color = rent_type),alpha=0.8)+
+  labs(x='房源租赁面积',y='房源签约价格',color = '租赁类型',title='<回龙观>房源签约价格与租赁面积——散点图')+
+  #scale_x_continuous(limits = c(0,175))+
+  #scale_y_continuous(limits = c(0,15000))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_color_discrete(labels = c('整租','合租'))
+
+ggplot(data = ziru0[ziru0$rent_type==2&ziru0$hdic_bizcircle_id==18335745,],aes(x = area,y=price_trans,color = as.factor(frame_bedroom_num)))+
+  geom_point(alpha = 0.5)+
+  labs(x='合租房源租赁面积',y='房源签约价格',title='<回龙观><合租房源>签约价格与租赁面积——散点图',color='卧室数量',subtitle = '不同颜色的点代表不同的卧室数量')+
+  #scale_x_continuous(limits = c(0,40))+
+  #scale_y_continuous(limits = c(1500,4000))+
+  scale_color_manual(values = c('red','blue'))+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5),plot.subtitle = element_text(family = 'myFont',size = 8 ,colour = 'blue'))
+
+ggplot(data = ziru0[ziru0$rent_type==2&ziru0$hdic_bizcircle_id==18335745,],aes(x = area,y=price_trans,color = as.factor(hdic_resblock_id)))+
+  geom_point(alpha = 0.8,size =1.3)+
+  labs(x='合租房源租赁面积',y='房源签约价格',title='<回龙观><合租房源>签约价格与租赁面积——散点图',color='小区编号',subtitle = '不同颜色的点代表不同的小区')+
+  scale_x_continuous(limits = c(6,35))+
+  scale_y_continuous(limits = c(1600,3700))+
+  scale_color_manual(values = rainbow(6))+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5),plot.subtitle = element_text(family = 'myFont',size = 8 ,colour = 'blue'))
+
+#同一商圈内：合租房源的成交价格和出租面积的相关系数：0.09 
+cor(x = ziru0[ziru0$rent_type==2&ziru0$hdic_bizcircle_id==18335745,'price_trans'],y = ziru0[ziru0$rent_type==2&ziru0$hdic_bizcircle_id==18335745,'area'],method = 'pearson')
+#同一商圈内：整租房源的成交价格和出租面积的相关系数：0.81
+cor(x = ziru0[ziru0$rent_type==1&ziru0$hdic_bizcircle_id==18335745,'price_trans'],y = ziru0[ziru0$rent_type==1&ziru0$hdic_bizcircle_id==18335745,'area'],method = 'pearson')
+
+```
+#### 回龙观：小区是不是影响合租价格的显著因素？
+```{r}
+#
+library(dplyr)
+hlg_xiaoqu = ziru0 %>% 
+  filter(hdic_bizcircle_id==18335745,rent_type==2) %>%
+  group_by(hdic_resblock_id) %>%
+  summarise(n = n(),mean_price = mean(price_trans),std_price = sd(price_trans))
+names(hlg_xiaoqu) = c('回龙观小区编号','成交的合租房源数量','成交均价','成交价格的标准差')
+
+ggplot(data =hlg_xiaoqu,aes(x= as.factor(hdic_resblock_id),y=mean_price,fill= as.factor(hdic_resblock_id)) ) +
+  geom_bar(stat = 'identity')+
+  labs(x='回龙观小区编号',y='合租成交均价',title='<回龙观><合租房源>按小区合租均价柱状图',
+       fill = '小区编号',subtitle = '柱子顶部的数字为该小区成交的合租房源数量')+
+  geom_text(aes(label = n))+
+  #scale_x_continuous(limits = c(6,35))+
+  #scale_y_continuous(limits = c(1600,3700))+
+  #scale_color_manual(values = rainbow(6))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 270),plot.title = element_text(hjust = 0.5),plot.subtitle = element_text(family = 'myFont',size = 8 ,colour = 'blue'))
+
+aov2 = aov(formula = price_trans~as.factor(hdic_resblock_id),data =ziru0[ziru0$rent_type==2&ziru0$hdic_bizcircle_id==18335745,])
+summary(aov2)
+aov2$coefficients
+```
+#### 回龙观：小区是不是影响合租价格的显著因素？
+```{r}
+library(dplyr)
+hlg_bedroom = ziru0 %>% 
+  filter(hdic_bizcircle_id==18335745,rent_type==2) %>%
+  group_by(frame_bedroom_num) %>%
+  summarise(n = n(),mean_price = mean(price_trans),std_price = sd(price_trans))
+
+
+ggplot(data =hlg_bedroom,aes(x= as.factor(frame_bedroom_num),y=mean_price,fill= as.factor(frame_bedroom_num)) ) +
+  geom_bar(stat = 'identity',size = 0.5)+
+  labs(x='不同卧室数量',y='合租成交均价',title='<回龙观><合租房源>按卧室数量均价柱状图',
+       fill = '卧室数量',subtitle = '柱子顶部的数字为该类型房源成交的合租房源数量')+
+  geom_text(aes(label = n))+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5),plot.subtitle = element_text(family = 'myFont',size = 8 ,colour = 'blue'))
+
+names(hlg_bedroom) = c('卧室数量','成交的合租房源数量','成交均价','成交价格的标准差')
+
+aov3 = aov(formula = price_trans~as.factor(frame_bedroom_num),data =ziru0[ziru0$rent_type==2&ziru0$hdic_bizcircle_id==18335745,])
+
+summary(aov3)
+aov2$coefficients
+```
+
+
+###3)房源签约单价与出租面积散点图（整租合租对比）：
+结论：1. 自如房源中：合租方式的签约单价是明显高于整租方式的签约单价的。</br>
+2. 对于整租房源而言，在同一商圈内，可以认为满足 price_listing = 
+
+#### 1.用北京所有商圈的房源数据来做图（17000条）
+```{r}
+ggplot(data = ziru0,aes(x = area,y=price_trans_per_area))+
+  geom_point(aes(color = rent_type),alpha=0.4)+
+  labs(x='房源租赁面积',y='房源签约单价',color = '租赁类型',title='房源签约单价与租赁面积——散点图')+
+  scale_x_continuous(limits = c(0,175))+
+  scale_y_continuous(limits = c(0,600))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_color_discrete(labels = c('整租','合租'))
+
+
+
+```
+
+#### 2.用北京某个商圈内的房源数据来做图（614条）
+```{r}
+ggplot(data = ziru0[ziru0$hdic_bizcircle_id==18335745,],aes(x = area,y=price_trans_per_area))+
+  geom_point(aes(color = rent_type),alpha=0.4)+
+  labs(x='房源租赁面积',y='房源签约单价',color = '租赁类型',title='房源签约单价与租赁面积——散点图')+
+  scale_x_continuous(limits = c(0,175))+
+  scale_y_continuous(limits = c(0,600))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_color_discrete(labels = c('整租','合租'))
+```
+
 
 ##step 4：对数据框ziru0分组
 按（商圈，小区，租赁方式）对数据框ziru0分组：得到ziru1_group</br>

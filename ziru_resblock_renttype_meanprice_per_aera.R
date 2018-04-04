@@ -52,3 +52,78 @@ predict_lm1 = predict(object = lm_1,newdata = ziru2_rent_type_junjia[indexNA2,c(
 hist(predict_lm1)
 ziru2_rent_type_junjia[indexNA2,'he_mean']=predict_lm1
 dim(ziru2_rent_type_junjia)
+
+#房源的租赁面积---箱线图
+ziru0$area = ziru0$price_listing/ziru0$price_listing_per_area
+ziru0 = ziru0[ziru0$area<200,]
+
+ggplot(data = ziru0,aes(x = rent_type,y=area))+
+  geom_boxplot(aes(colour = rent_type),alpha=0.4)+
+  labs(x='房源租赁类型',y='房源出租面积',color = '租赁类型',title='房源出租面积——箱线图')+
+  scale_x_discrete(labels = c('整租','合租'))+
+  scale_y_continuous(limits = c(0,200))+
+  scale_color_discrete(labels = c('整租','合租'))+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+#结论：整租的出租面积（75%在50m2-100m2之间）明显高于合租的出租面积（50%在10m2-15m2之间）
+summary(ziru0[ziru0$rent_type==1,'area'])
+summary(ziru0[ziru0$rent_type==2,'area'])
+
+#房源签约价格与租赁面积---散点图：
+names(ziru0)
+str(ziru0)
+library(ggplot2)
+ggplot(data = ziru0,aes(x = area,y=price_listing))+
+  geom_point(aes(color = rent_type),alpha=0.4)+
+  labs(x='房源租赁面积',y='房源签约价格',color = '租赁类型',title='房源签约价格与租赁面积——散点图')+
+  scale_x_continuous(limits = c(0,175))+
+  scale_y_continuous(limits = c(0,15000))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_color_discrete(labels = c('整租','合租'))
+
+#房屋签约单价与租赁面积---散点图：
+ggplot(data = ziru0,aes(x = area,y=price_listing_per_area))+
+  geom_point(aes(color = rent_type),alpha=0.4)+
+  labs(x='房源租赁面积',y='房源签约单价',color = '租赁类型',title='房源签约单价与租赁面积——散点图')+
+  scale_x_continuous(limits = c(0,175))+
+  scale_y_continuous(limits = c(0,600))+
+  theme_bw()+
+  scale_color_discrete()+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_color_discrete(labels = c('整租','合租'))
+
+
+
+a = sort(table(ziru0$hdic_bizcircle_id))
+length(a)#共216个商圈
+class(a)#table
+summary(a)
+barplot(a)
+shangquan = data.frame(number = a)
+
+#依照商圈的租房热门程度,编码离散化变量：商圈热度：
+#变量离散化过程中阈值的选择依据：（1-33：冷清）包含25%的商圈,（34-100：一般）包含50%的商圈，（101及以上：热门）包含25%的商圈。
+summary(shangquan$number.Freq)
+#重编码
+library(dplyr)
+shangquan <- shangquan %>%
+  mutate(
+    shangquan_degree = case_when(
+      number.Freq <=33 ~ '冷清商圈',
+      number.Freq>34 & number.Freq<100 ~ '一般商圈',
+      number.Freq>=100 ~ '热门商圈' 
+      )
+  )
+shangquan$shangquan_degree=as.factor(shangquan$shangquan_degree)
+names(shangquan) = c('hdic_bizcircle_id','shangquan_pinshu','shangquan_degree')
+
+#画图：北京自如的热门商圈展示
+windowsFonts(myFont=windowsFont("楷体"))
+ggplot(shangquan[shangquan$shangquan_degree=='热门商圈',],aes(x = hdic_bizcircle_id,y = shangquan_pinshu))+
+  geom_bar(stat = 'identity',fill='#FFD700',color = '#8B6508')+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=1))+
+  labs(x= 'top25%热门商圈ID',y='商圈近3个月的成交量',title = '北京自如热门商圈展示',subtitle = '热门商圈定义：过去3个月成交量>100笔')+
+  theme(plot.title = element_text(hjust = 0.5),plot.subtitle = element_text(family = 'myFont',size = 8 ,colour = 'red'))

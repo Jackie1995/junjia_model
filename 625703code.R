@@ -94,3 +94,11 @@ predict_lm1 = predict(object = lm_1,newdata = ziru2_rent_type_junjia[indexNA2,c(
 hist(predict_lm1)
 ziru2_rent_type_junjia[indexNA2,'he_mean']=predict_lm1
 dim(ziru2_rent_type_junjia)
+
+#ggplot画图
+library(ggplot2)
+names(data3)
+data3$rent_type = as.factor(data3$rent_type)
+ggplot(data = data3,aes(x = rent_type,y=price_trans))+
+  geom_boxplot()
+
